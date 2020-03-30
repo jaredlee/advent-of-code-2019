@@ -1,62 +1,214 @@
 #![allow(unused)]
 
-use std::cmp;
 use std::fs;
 
-fn evaluate(state: &mut Vec<i64>)
+enum OpCode
 {
-    let mut pos = 0;
+    Add {src1: usize, src2: usize, dst: usize},
+    Mul {src1: usize, src2: usize, dst: usize},
+    Halt,
+}
 
-    loop
+impl OpCode 
+{
+    fn size(&self) -> i64
     {
-        let opcode = state[pos];
-
-        if opcode == 99
+        match self 
         {
-            return
+            OpCode::Add {..} => 4,
+            OpCode::Mul {..} => 4,
+            OpCode::Halt {..} => 0,
         }
+    }
+}
 
-        let index1 = state[pos+1] as usize;
-        let index2 = state[pos+2] as usize;
-        let index3 = state[pos+3] as usize;
+struct RAM { buffer: Vec<i64> }
+struct CPU { counter: usize }
+struct Computer { ram: RAM, cpu: CPU }
 
-        state[index3] = match opcode
+impl RAM
+{
+    fn size() -> usize { 0x100 }
+
+    fn new() -> RAM 
+    {
+        let mut ram = RAM { buffer: Vec::new() };
+        ram.clear();
+        ram
+    }
+
+    fn read(&self, address: usize) -> i64 { self.buffer[address] }
+
+    fn write(&mut self, address: usize, value: i64) 
+    { 
+        self.buffer[address] = value; 
+    }
+    
+    fn clear(&mut self) 
+    { 
+        self.buffer.clear();
+        self.buffer.resize(RAM::size(), 0); 
+    }
+}
+
+impl CPU
+{
+    fn new() -> CPU { CPU { counter: 0 } }
+
+    fn clear(&mut self) { self.counter = 0; }
+
+    fn halted(&self, ram: &RAM) -> bool
+    {
+        match self.decode(ram) 
         {
-            1  => state[index1] + state[index2],
-            2  => state[index1] * state[index2],
-            _  => panic!("Invalid opcode!")
+            OpCode::Halt => true,
+            _ => false
+        }
+    }
+
+    fn cycle(&mut self, ram: &mut RAM)
+    {
+        let opcode = self.decode(ram);
+        self.execute(&opcode, ram);
+    }
+
+    fn decode(&self, ram: &RAM) -> OpCode
+    {
+        let value = ram.read(self.counter);
+
+        let opcode = match value
+        {
+            1 => OpCode::Add { 
+                src1: ram.read(self.counter+1) as usize,
+                src2: ram.read(self.counter+2) as usize,
+                dst:  ram.read(self.counter+3) as usize,
+            },
+
+            2 => OpCode::Mul { 
+                src1: ram.read(self.counter+1) as usize,
+                src2: ram.read(self.counter+2) as usize,
+                dst:  ram.read(self.counter+3) as usize,
+            },
+
+            99 => OpCode::Halt,
+
+            _ => panic!("Unrecognized opcode value: {}!", value)
         };
 
-        pos += 4;
+        opcode
+    }
+
+    fn execute(&mut self, opcode: &OpCode, ram: &mut RAM)
+    {
+        match opcode
+        {
+            &OpCode::Add {src1, src2, dst} =>
+            {
+                let a = ram.read(src1);
+                let b = ram.read(src2);
+                ram.write(dst, a+b);
+            },
+
+            &OpCode::Mul {src1, src2, dst} =>
+            {
+                let a = ram.read(src1);
+                let b = ram.read(src2);
+                ram.write(dst, a*b);
+            },
+
+            &OpCode::Halt => (),
+
+            _ => panic!("Unrecognized opcode!")
+        }
+
+        self.counter += opcode.size() as usize;
     }
 }
 
-pub fn solve_part_one(input_file: &str, init: &[(usize, i64)]) -> i64
+impl Computer
 {
-    let contents = fs::read_to_string(input_file)
-        .expect(&format!("Unable to read file {}", input_file));
+    fn new() -> Computer
+    {
+        Computer 
+        { 
+            ram: RAM::new(),
+            cpu: CPU::new(),
+        } 
+    }
 
-    let mut state = Vec::new();
+    fn clear(&mut self) 
+    {
+        self.ram.clear();
+        self.cpu.clear();
+    }
+
+    fn load_file(&mut self, file: &str)
+    {
+        let text = fs::read_to_string(file)
+            .expect(&format!("Unable to read file {}", file));
+        
+        self.load_text(&text);
+    }
+
+    fn load_text(&mut self, text: &str)
+    {
+        for (address, token) in text.split(",").enumerate()
+        {
+            let value = token.parse::<i64>().unwrap();
+            self.ram.write(address, value);
+        }
+    }
+
+    fn init(&mut self, values: &[(usize, i64)])
+    {
+        for (address, value) in values.iter()
+        {
+            self.ram.write(*address, *value);
+        }
+    }
     
-    for token in contents.split(",")
+    fn exec(&mut self)
     {
-        state.push(token.parse::<i64>().unwrap());
+        let cpu = &mut self.cpu;
+        let ram = &mut self.ram;
+
+        while !cpu.halted(ram)
+        {
+            cpu.cycle(ram);
+        }
     }
+} 
 
-    for (index, value) in init
-    {
-        state[*index] = *value;
-    }
+pub fn solve_part_one(file: &str) -> i64
+{
+    let mut computer = Computer::new();
 
-    evaluate(&mut state);
+    computer.load_file(file);
+    computer.init(&[(1, 12), (2, 2)]);
+    computer.exec();
 
-    state[0]
+    computer.ram.read(0)
 }
 
-pub fn solve_part_two(input_file: &str) -> i64
+pub fn solve_part_two(file: &str) -> i64
 {
-    let contents = fs::read_to_string(input_file)
-        .expect(&format!("Unable to read file {}", input_file));
+    let mut computer = Computer::new();
+
+    for x in 0..=99 
+    {
+        for y in 0..=99
+        {
+            computer.clear();
+            computer.load_file(file);
+            computer.init(&[(1,x), (2,y)]);
+            computer.exec();
+            
+            if computer.ram.read(0) == 19690720
+            {
+                return 100 * x + y;
+            }
+        }
+    }
 
     0
 }
@@ -69,25 +221,46 @@ mod examples
     #[test]
     fn part_one()
     {
-        let mut state = vec![1,0,0,0,99];
-        evaluate(&mut state);
-        assert_eq!(state, vec![2,0,0,0,99]);
+        let mut computer = Computer::new();
 
-        let mut state = vec![2,3,0,3,99];
-        evaluate(&mut state);
-        assert_eq!(state, vec![2,3,0,6,99]);
+        let text = "1,0,0,0,99";
 
-        let mut state = vec![2,4,4,5,99,0];
-        evaluate(&mut state);
-        assert_eq!(state, vec![2,4,4,5,99,9801]);
+        computer.load_text(text);
+        computer.exec();
 
-        let mut state = vec![1,1,1,4,99,5,6,0,99];
-        evaluate(&mut state);
-        assert_eq!(state, vec![30,1,1,4,2,5,6,0,99]);
+        assert_eq!(computer.ram.buffer[0..5], [2,0,0,0,99]);
+
+        computer.clear();
+
+        let text = "2,3,0,3,99";
+
+        computer.load_text(text);
+        computer.exec();
+
+        assert_eq!(computer.ram.buffer[0..5], [2,3,0,6,99]);
+
+        computer.clear();
+
+        let text = "2,4,4,5,99,0";
+
+        computer.load_text(text);
+        computer.exec();
+
+        assert_eq!(computer.ram.buffer[0..6], [2,4,4,5,99,9801]);
+
+        computer.clear();
+
+        let text = "1,1,1,4,99,5,6,0,99";
+
+        computer.load_text(text);
+        computer.exec();
+
+        assert_eq!(computer.ram.buffer[0..9], [30,1,1,4,2,5,6,0,99]);
     }
 
     #[test]
     fn part_two()
     {
+        
     }
 }
